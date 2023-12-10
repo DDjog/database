@@ -1,0 +1,404 @@
+
+import faker
+from random import randint, choice
+import random
+
+import psycopg2
+
+uri = "postgres://worker:secret@localhost:5432/postgres"
+
+NUMBER_STUDENTS = 30
+NUMBER_STUDENTS_GROUPS = 3
+NUMBER_SUBJECTS = 7
+NUMBER_LECTURERS = 5
+NUMBER_NOTES = 20
+
+
+def generate_fake_data(number_students, number_students_group, number_subjects, number_lecturers, number_notes):
+    fake_students = []
+    fake_students_groups = []
+    fake_subjects = []
+    fake_lecturers = []
+    fake_notes = []
+
+    fake = faker.Faker()
+
+    for _ in range(number_students):
+        fake_students.append(fake.name())
+
+    idx = 1
+    for _ in range(number_students_group):
+        fake_students_groups.append("Group " + str(idx))
+        idx = idx + 1
+
+    idx = 1
+    for _ in range(number_subjects):
+        fake_subjects.append("Subject " + str(idx))
+        idx = idx + 1
+
+    for _ in range(number_lecturers):
+        fake_lecturers.append(fake.name())
+
+    for _ in range(number_notes * number_students * number_subjects):
+        fake_notes.append(randint(1, 6))
+
+    return fake_students, fake_students_groups, fake_subjects, fake_lecturers, fake_notes
+
+
+def prepare_data(students, students_groups, subjects, lecturers, notes) -> tuple():
+    for_students = []
+
+    for student in students:
+        for_students.append((student,))
+
+    for_students_groups = []
+
+    for students_group in students_groups:
+        for_students_groups.append((students_group,))
+
+    for_subjects = []
+
+    for subject in subjects:
+        for_subjects.append((subject,))
+
+    for_lecturers = []
+
+    for lecturer in lecturers:
+        for_lecturers.append((lecturer,))
+
+    for_notes = []
+
+    for note in notes:
+        for_notes.append(note)
+
+    return for_students, for_students_groups, for_subjects, for_lecturers, for_notes
+
+
+def create_tables_in_database():
+    with psycopg2.connect(uri) as connection:
+        cursor = connection.cursor()
+        cursor.execute("""
+/*  */
+CREATE TABLE IF NOT EXISTS students (
+    id_student SERIAL PRIMARY KEY,
+    student_full_name VARCHAR(255) NOT NULL
+);
+
+/*  */
+CREATE TABLE IF NOT EXISTS lecturers (
+    id_lecturer SERIAL PRIMARY KEY,
+    lecturer_full_name VARCHAR(255) NOT NULL
+);
+
+/*  */
+CREATE TABLE IF NOT EXISTS groups (
+    id_group SERIAL PRIMARY KEY,
+    group_name VARCHAR(255) NOT NULL
+);
+
+/*  */
+CREATE TABLE IF NOT EXISTS subjects (
+    id_subject SERIAL PRIMARY KEY,
+    subject_name VARCHAR(255) NOT NULL
+);
+
+/*  */
+CREATE TABLE IF NOT EXISTS  students_groups_assign (
+
+    id_assign SERIAL PRIMARY KEY,
+
+    student_id INT,
+    students_group_id INT,
+
+    CONSTRAINT fk_student FOREIGN KEY(student_id) references students (id_student),
+    CONSTRAINT fk_students_group FOREIGN KEY(students_group_id) references groups (id_group)
+);
+
+/*  */
+CREATE TABLE IF NOT EXISTS subjects_assign (
+
+    id_assign SERIAL PRIMARY KEY,
+
+    students_group_id INT,
+    lecturer_id INT,
+    subject_id INT,
+
+    CONSTRAINT fk_students_groups FOREIGN KEY(students_group_id) references groups (id_group),
+    CONSTRAINT fk_lecturer FOREIGN KEY(lecturer_id) references lecturers (id_lecturer),
+    CONSTRAINT fk_subject FOREIGN KEY(subject_id) references subjects (id_subject)
+
+);
+
+
+CREATE TABLE IF NOT EXISTS notes (
+    id_note SERIAL PRIMARY KEY,
+    date_of_note DATE NOT NULL,
+
+    note REAL NOT NULL,
+
+    subject_id INT,
+    student_id INT,
+
+    CONSTRAINT fk_subject FOREIGN KEY(subject_id) references subjects( id_subject ),
+    CONSTRAINT fk_student FOREIGN KEY(student_id) references students( id_student )
+);                """)
+        connection.commit()
+
+
+def delete_all_data_in_database():
+    with psycopg2.connect(uri) as connection:
+        cursor = connection.cursor()
+
+        cursor.execute("delete from notes;")
+        cursor.execute("delete from students_groups_assign;")
+        cursor.execute("delete from subjects_assign;")
+        cursor.execute("delete from subjects;")
+        cursor.execute("delete from groups;")
+        cursor.execute("delete from lecturers;")
+        cursor.execute("delete from students;")
+
+        cursor.execute("ALTER SEQUENCE students_id_student_seq RESTART with 1;")
+        cursor.execute("ALTER SEQUENCE lecturers_id_lecturer_seq RESTART with 1;")
+        cursor.execute("ALTER SEQUENCE groups_id_group_seq RESTART with 1;")
+        cursor.execute("ALTER SEQUENCE subjects_id_subject_seq RESTART with 1;")
+        cursor.execute("ALTER SEQUENCE subjects_assign_id_assign_seq RESTART with 1;")
+        cursor.execute("ALTER SEQUENCE students_groups_assign_id_assign_seq RESTART with 1;")
+        cursor.execute("ALTER SEQUENCE notes_id_note_seq RESTART with 1;")
+
+        connection.commit()
+
+
+def insert_data_to_db(students, lecturers, students_groups, subjects, notes):
+    fake = faker.Faker()
+
+    with psycopg2.connect(uri) as connection:
+
+        cursor = connection.cursor()
+
+        cursor.executemany("INSERT INTO students (student_full_name) VALUES ( %s );", students)
+        
+
+        cursor.executemany("INSERT INTO lecturers (lecturer_full_name) VALUES ( %s );", lecturers)
+        
+
+        cursor.executemany("INSERT INTO groups (group_name) VALUES ( %s );", students_groups)
+        
+
+        cursor.executemany("INSERT INTO subjects (subject_name) VALUES ( %s );", subjects)
+        
+
+        
+        # przypisanie studentów do grup
+        students_id_list = list(range(1, NUMBER_STUDENTS + 1))
+        random.shuffle(students_id_list)
+
+        # działa dla iloci podzielnej bez reszty
+        for g in range(1, NUMBER_STUDENTS_GROUPS + 1):
+            for _ in range(1, int(NUMBER_STUDENTS / NUMBER_STUDENTS_GROUPS) + 1):
+                student_id = students_id_list.pop()
+
+                cursor.execute("insert into students_groups_assign (student_id, students_group_id) values (%s, %s);",
+                               (student_id, g))
+        
+
+        
+        # przypisanie grup studentów i wykladowców do przedmiotów
+        for sgid in range(1, NUMBER_STUDENTS_GROUPS + 1):
+            for sid in range(1, NUMBER_SUBJECTS + 1):
+                lid = randint(1, NUMBER_LECTURERS)
+
+                cursor.execute(
+                    "insert into subjects_assign (students_group_id, lecturer_id, subject_id) values (%s, %s, %s);",
+                    (sgid, lid, sid))
+                
+      
+
+        # generacja ocen
+
+        for sid in range(1, NUMBER_STUDENTS + 1):
+
+            date_of_note = fake.date_between(start_date='-8m', end_date='now')
+            for subjectid in range(1, NUMBER_SUBJECTS + 1):
+                for _ in range(1, NUMBER_NOTES + 1):
+                    note = notes.pop()
+                    cursor.execute(
+                        "insert into notes ( date_of_note, note,  subject_id, student_id ) values (%s, %s, %s, %s);",
+                        (date_of_note, note, subjectid, sid))
+
+       
+
+        connection.commit()
+
+
+def queries_to_database():
+    with psycopg2.connect(uri) as connection:
+        cursor = connection.cursor()
+
+        # 5 uczniów z najwyższą średnią ocen ze wszystkich przedmiotów.
+        # query_1.sql
+        print("Lista pięciu uczniów z najwyższą średnią ocen ze wszystkich przedmiotów.")
+        cursor.execute("""
+        SELECT AVG(n.note) as average_note, s.student_full_name
+        FROM notes as n
+        LEFT JOIN students as s ON n.student_id = s.id_student
+        GROUP BY s.student_full_name
+        ORDER BY average_note desc
+        LIMIT 5;""")
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0], " ", r[1])
+
+        # Uczeń z najwyższą średnią ocen z wybranego przedmiotu.
+        print("Uczeń z najwyższą średnią ocen z wybranego przedmiotu.")
+        subject_name = "Subject 3"
+        cursor.execute("""
+        SELECT s.student_full_name as student, AVG(n.note) as average_note
+        FROM students as s
+        LEFT JOIN notes as n ON s.id_student = n.student_id
+        LEFT JOIN subjects as sub ON n.subject_id = sub.id_subject
+        WHERE sub.subject_name = %s
+        GROUP BY s.student_full_name
+        ORDER BY average_note desc
+        LIMIT 1;""", [str(subject_name)])
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0], " ", r[1])
+
+        # Średnia ocen w grupach dla wybranego przedmiotu.
+        print("Średnia ocen w grupach dla wybranego przedmiotu.")
+        subject_name = "Subject 2"
+        cursor.execute("""
+        SELECT AVG(n.note) as average_note, sg.students_group_id
+        FROM notes as n
+        LEFT JOIN students as s ON n.student_id = s.id_student
+        LEFT JOIN students_groups_assign as sg ON s.id_student = sg.student_id
+        LEFT JOIN subjects as sub ON n.subject_id = sub.id_subject
+        WHERE sub.subject_name = %s
+        GROUP BY sg.students_group_id
+        ORDER BY average_note desc;""", [str(subject_name)] )
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0], " ", r[1])
+
+        # Średnia ocen dla wszystkich grup, uwzględniając wszystkie oceny.
+        print("Średnia ocen dla wszystkich grup, uwzględniając wszystkie oceny.")
+        cursor.execute("""
+        SELECT AVG(n.note) as average_note, sga.students_group_id
+        FROM notes as n
+        LEFT JOIN students as s ON n.student_id = s.id_student
+        LEFT JOIN students_groups_assign as sga ON s.id_student = sga.student_id
+        GROUP BY sga.students_group_id
+        ORDER BY average_note desc;""")
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0], " ", r[1])
+
+        # Przedmioty, które prowadzi wybrany wykładowca.
+        print("Przedmioty, które prowadzi wybrany wykładowca.")
+        lecturer_id = 2
+        cursor.execute("""
+        SELECT subjects.subject_name, lecturers.lecturer_full_name
+        FROM subjects, lecturers, subjects_assign
+        WHERE lecturers.id_lecturer = %s AND subjects_assign.lecturer_id = lecturers.id_lecturer AND subjects_assign.subject_id = subjects.id_subject
+        GROUP BY subjects.subject_name, lecturers.lecturer_full_name
+        ORDER BY subjects.subject_name;""", ( str(lecturer_id) ))
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0], " ", r[1])
+
+        #Lista uczniów w wybranej grupie.
+        print("Lista uczniów w wybranej grupie")
+        students_group_id = 2
+        cursor.execute("""
+        SELECT  student_id, student_full_name, group_name
+        FROM students_groups_assign, students, groups
+        WHERE students_groups_assign.students_group_id = %s 
+            AND students.id_student = students_groups_assign.student_id 
+            AND groups.id_group = students_groups_assign.students_group_id;
+            """, (str(students_group_id)))
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0], " ", r[1], " ", r[2])
+
+        # Oceny uczniów w wybranej grupie z określonego przedmiotu.
+        print("Oceny uczniów w wybranej grupie z określonego przedmiotu.")
+        students_group_id = 3
+        subject_id = 7
+        cursor.execute("""
+        SELECT note, student_full_name, group_name
+        FROM  notes as n
+        LEFT JOIN students as s ON n.student_id = s.id_student
+        LEFT JOIN students_groups_assign as sga ON s.id_student = sga.student_id
+        LEFT JOIN groups as g ON sga.students_group_id = g.id_group
+        LEFT JOIN subjects_assign as sa ON g.id_group = sa.students_group_id
+        WHERE sga.students_group_id = %s AND sa.subject_id = %s;""", ( str(students_group_id), str(subject_id) ))
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0], " ", r[1], " ", r[2])
+
+
+        # Średnia ocen wystawionych przez wykładowcę z danego przedmiotu.
+        print("Średnia ocen wystawionych przez wykładowcę z danego przedmiotu")
+        lecturer_id = 1
+        subject_id = 6
+        cursor.execute("""
+        SELECT AVG(note)
+        FROM notes as n
+        LEFT JOIN subjects_assign as sa ON  n.subject_id = sa.subject_id
+        WHERE  sa.lecturer_id =  %s AND sa.subject_id = %s""", ( str(lecturer_id), str(subject_id)))
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0])
+
+        # Lista kursów, na które uczęszcza uczeń.
+        print("Lista kursów, na które uczęszcza uczeń.")
+        student_id = 1
+        cursor.execute("""
+        SELECT subjects.subject_name
+        FROM subjects, subjects_assign
+        WHERE subjects.id_subject = subjects_assign.subject_id AND subjects_assign.students_group_id = (
+            SELECT students_groups_assign.students_group_id
+            FROM students_groups_assign
+            WHERE students_groups_assign.student_id = %s);""", ( str(student_id) ))
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0])
+
+        # Lista kursów prowadzonych przez wybranego wykładowcę dla określonego ucznia.
+        print("Lista kursów prowadzonych przez wybranego wykładowcę dla określonego ucznia.")
+        lecturer_id = 4
+        student_id = 2
+        cursor.execute("""
+                   select subjects.id_subject, subjects.subject_name as sub_name
+                   from subjects, subjects_assign
+                   where subjects_assign.subject_id = subjects.id_subject and subjects_assign.lecturer_id = %s 
+                       and subjects_assign.students_group_id = (
+                           select students_groups_assign.students_group_id as group_id
+                           from students_groups_assign
+                           where students_groups_assign.student_id = %s 
+                       );
+               """, (str(lecturer_id), str(student_id)))
+        rows = cursor.fetchall()
+        for r in rows:
+            print(r[0])
+
+
+if __name__ == "__main__":
+    students, students_groups, subjects, lecturers, notes = prepare_data(
+        *generate_fake_data(NUMBER_STUDENTS, NUMBER_STUDENTS_GROUPS, NUMBER_SUBJECTS, NUMBER_LECTURERS, NUMBER_NOTES))
+
+    print(students)
+    print(students_groups)
+    print(subjects)
+    print(lecturers)
+    print(notes)
+
+    create_tables_in_database()
+
+    delete_all_data_in_database()
+
+    insert_data_to_db(students, lecturers, students_groups, subjects, notes)
+
+    queries_to_database()
+
+
